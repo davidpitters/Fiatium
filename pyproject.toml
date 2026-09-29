@@ -1,0 +1,33 @@
+[build-system]
+requires = ["setuptools==84.0.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "fiatium"
+version = "0.1.0"
+description = "Simulated payment operations with a SQL Server double-entry ledger"
+requires-python = ">=3.12"
+dependencies = [
+  "fastapi==0.142.0", "uvicorn==0.54.0", "SQLAlchemy==2.1.1",
+  "alembic==1.20.0", "pyodbc==5.3.0", "pydantic-settings==2.15.0",
+  "confluent-kafka==2.15.1",
+]
+
+[project.optional-dependencies]
+dev = ["pytest==9.1.1", "httpx==0.28.1", "ruff==0.16.9", "pip-tools==7.6.1", "setuptools==84.0.0"]
+
+[tool.setuptools.packages.find]
+where = ["services"]
+include = ["fiatium*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["services"]
+markers = ["integration: requires a migrated SQL Server database"]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B"]

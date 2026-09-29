@@ -1,0 +1,47 @@
+name: Checks
+on: [push, pull_request, workflow_dispatch]
+jobs:
+  python:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.12.14'}
+      - run: pip install -r requirements-dev.lock
+      - run: ruff check services tests db/migrations scripts
+      - run: ruff format --check services tests db/migrations scripts
+      - run: pytest tests/test_domain.py -q
+  web:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: {node-version: '24.19.0'}
+      - run: npm install --global pnpm@11.25.0
+      - run: pnpm install --frozen-lockfile
+        working-directory: apps/web
+      - run: pnpm build
+        working-directory: apps/web
+      - run: pnpm format:check
+        working-directory: apps/web
+  compose:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - run: python scripts/init-compose.py
+      - run: docker compose --env-file .env.compose config --quiet
+      - run: docker compose --env-file .env.compose up --build --wait --wait-timeout 240
+      - name: HTTP and broker smoke
+        run: |
+          docker compose --env-file .env.compose --profile test build verify
+          docker compose --env-file .env.compose run --rm verify python scripts/smoke.py --url http://api:8000
+      - name: SQL invariants and concurrency
+        run: |
+          docker compose --env-file .env.compose stop publisher worker
+          docker compose --env-file .env.compose run --rm verify
+      - name: Logs on failure
+        if: failure()
+        run: docker compose --env-file .env.compose logs --no-color --tail 100
+      - name: Stop ephemeral stack
+        if: always()
+        run: docker compose --env-file .env.compose down --volumes

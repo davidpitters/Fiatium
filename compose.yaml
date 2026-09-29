@@ -1,0 +1,101 @@
+name: fiatium
+x-app: &app
+  build: {context: ., target: runtime}
+  image: fiatium-app:0.1.0
+  environment: &environment
+    FIATIUM_DATABASE_URL: "mssql+pyodbc://fiatium_app:${FIATIUM_APP_PASSWORD:?Generate .env.compose}@sqlserver/FiatiumDev?driver=ODBC+Driver+18+for+SQL+Server&TrustServerCertificate=yes"
+    FIATIUM_TOKENS: "${FIATIUM_TOKENS:?Generate .env.compose}"
+    FIATIUM_BROKER: redpanda:9092
+  init: true
+  stop_grace_period: 30s
+  restart: unless-stopped
+
+services:
+  sqlserver:
+    image: mcr.microsoft.com/mssql/server:2022-CU27-ubuntu-22.04
+    environment:
+      ACCEPT_EULA: "Y"
+      MSSQL_PID: Developer
+      MSSQL_SA_PASSWORD: "${MSSQL_SA_PASSWORD:?Generate .env.compose}"
+    volumes: [sql-data:/var/opt/mssql]
+    healthcheck:
+      test: [CMD-SHELL, '/opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -P "$$MSSQL_SA_PASSWORD" -C -Q "SELECT 1" -b -o /dev/null']
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 20s
+  migrate:
+    <<: *app
+    restart: "no"
+    environment:
+      <<: *environment
+      FIATIUM_DATABASE_URL: "mssql+pyodbc://sa:${MSSQL_SA_PASSWORD}@sqlserver/FiatiumDev?driver=ODBC+Driver+18+for+SQL+Server&TrustServerCertificate=yes"
+      MSSQL_SA_PASSWORD: "${MSSQL_SA_PASSWORD}"
+      FIATIUM_APP_PASSWORD: "${FIATIUM_APP_PASSWORD}"
+    command: [python, -m, fiatium.bootstrap]
+    depends_on:
+      sqlserver: {condition: service_healthy}
+  redpanda:
+    image: docker.redpanda.com/redpandadata/redpanda:v26.2.3
+    command: [redpanda, start, --smp, "1", --memory, 1G, --reserve-memory, 0M, --overprovisioned, --node-id, "0", --check=false, --kafka-addr, "internal://0.0.0.0:9092,external://0.0.0.0:19092", --advertise-kafka-addr, "internal://redpanda:9092,external://localhost:19092"]
+    ports: ["127.0.0.1:19092:19092"]
+    volumes: [broker-data:/var/lib/redpanda/data]
+    healthcheck:
+      test: [CMD, rpk, cluster, health, --exit-when-healthy, -X, brokers=localhost:9092]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+  topic:
+    image: docker.redpanda.com/redpandadata/redpanda:v26.2.3
+    entrypoint: [/bin/sh, -ec]
+    command: ['rpk topic describe fiatium.payments.v1 -X brokers=redpanda:9092 || rpk topic create fiatium.payments.v1 --partitions 3 --replicas 1 -X brokers=redpanda:9092']
+    depends_on:
+      redpanda: {condition: service_healthy}
+  api:
+    <<: *app
+    ports: ["127.0.0.1:8000:8000"]
+    depends_on:
+      migrate: {condition: service_completed_successfully}
+    healthcheck:
+      test: [CMD, python, -c, "import urllib.request; urllib.request.urlopen('http://localhost:8000/health/ready')"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+  publisher:
+    <<: *app
+    command: [python, -m, fiatium.worker, publish]
+    depends_on:
+      migrate: {condition: service_completed_successfully}
+      topic: {condition: service_completed_successfully}
+  worker:
+    <<: *app
+    command: [python, -m, fiatium.worker, consume]
+    depends_on:
+      migrate: {condition: service_completed_successfully}
+      topic: {condition: service_completed_successfully}
+  web:
+    build: apps/web
+    image: fiatium-web:0.1.0
+    ports: ["127.0.0.1:8080:8080"]
+    init: true
+    depends_on:
+      api: {condition: service_healthy}
+    healthcheck:
+      test: [CMD, node, -e, "fetch('http://localhost:8080/').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+  verify:
+    <<: *app
+    profiles: [test]
+    build: {context: ., target: verification}
+    image: fiatium-verification:0.1.0
+    restart: "no"
+    environment:
+      <<: *environment
+      FIATIUM_SQL_TESTS: "1"
+    depends_on:
+      api: {condition: service_healthy}
+volumes:
+  sql-data:
+  broker-data:
