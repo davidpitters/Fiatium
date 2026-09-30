@@ -29,7 +29,7 @@ def process(event: dict, *, fail_before_post=False):
         )
         if not payment:
             raise ValueError("Event refers to an unknown tenant/payment")
-        if payment["status"] in ("settled", "failed"):
+        if payment["status"] in ("settled", "failed", "refunded"):
             receipt(conn, event_id)
             return
         previous = one(
@@ -70,7 +70,7 @@ def process(event: dict, *, fail_before_post=False):
         payment = one(
             conn, "SELECT * FROM payments WHERE tenant=:t AND id=:id", t=tenant, id=payment_id
         )
-        if payment["status"] not in ("settled", "failed"):
+        if payment["status"] not in ("settled", "failed", "refunded"):
             if outcome == "settled":
                 post(conn, tenant, f"settlement:{payment_id}", "CASH", "AR", payment["amount"])
                 conn.execute(

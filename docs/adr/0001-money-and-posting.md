@@ -10,7 +10,7 @@ individual API amounts within JavaScript's exact integer range.
 An invoice posts debit AR / credit REVENUE. Settlement posts debit CASH / credit
 AR. Authorization and timeouts never post cash. Declines release the invoice's
 active payment slot. Settlement keeps that slot occupied, preventing a second payment.
-Partial payments and refunds are not exposed in this slice.
+Partial payments are not exposed. Full simulated refunds were added in revision 0002.
 
 `post_journal` builds a draft header and signed lines, then transitions the header
 to posted in a SQL transaction nested within the caller's transaction. A trigger
@@ -40,5 +40,28 @@ facts deliberately commit separately before payment/journal settlement, making
 missing-ledger discrepancies visible and recoverable. Repeated settlement is
 guarded by a payment lock, terminal state, inbox receipt and unique journal operation.
 
-Corrections must eventually use reversing/replacement transactions. No journal
-editing or refund endpoint is implemented. Do not infer full accounting coverage.
+## Full refunds (2026-09-30)
+
+`POST /api/refunds` requires an operator, payment ID, nonblank reason and idempotency
+key. Only a settled payment with matching processor and journal evidence qualifies.
+It posts a new AR debit / CASH credit, preserving and referencing the original
+settlement. The original invoice/revenue posting remains: refund reopens the
+receivable and permits another payment; it does not cancel the invoice.
+
+Refunds have their own idempotency namespace and a unique tenant/payment key.
+Same-key identical requests replay the original 201 body. Different keys cannot
+refund a payment twice, and a changed payload under the same key conflicts.
+The invoice and payment locks serialize reopening with competing operations.
+Late payment-worker events treat refunded as terminal, including after a new
+payment is created for the reopened invoice.
+
+The fake refund processor is synchronous and in-process: its synthetic receipt,
+reversal, refund record, payment state and invoice state commit in one SQL transaction.
+There is no remote refund API, refund broker event or claim of external atomicity.
+An injected failure after journal posting proves rollback and same-key retry.
+Refund evidence is immutable via a SQL trigger. Payment detail returns receipt,
+reason, original/reversal IDs and correlation ID; reconciliation checks refund
+state, original reference and reversal amount.
+
+Partial refunds, invoice cancellation/credit notes, arbitrary journal corrections
+and remote-processor refund retries remain outside this implementation.

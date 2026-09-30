@@ -1,4 +1,3 @@
-from datetime import UTC, datetime
 from uuid import uuid4
 
 from sqlalchemy import text
@@ -8,15 +7,15 @@ from fiatium.db import engine, many
 
 def reconcile(tenant: str):
     run_id = str(uuid4())
-    end = datetime.now(UTC).replace(tzinfo=None)
     findings = []
     with engine().execution_options(isolation_level="SERIALIZABLE").begin() as conn:
         # A short serializable read gives this bounded demo run a consistent snapshot.
-        conn.execute(
+        end = conn.execute(
             text("""INSERT INTO reconciliation_runs(id,tenant,window_start,window_end)
-            VALUES(:id,:t,'2000-01-01',:end)"""),
-            {"id": run_id, "t": tenant, "end": end},
-        )
+            OUTPUT inserted.window_end
+            VALUES(:id,:t,'2000-01-01',SYSUTCDATETIME())"""),
+            {"id": run_id, "t": tenant},
+        ).scalar_one()
         rows = many(
             conn,
             """SELECT p.id,p.amount,p.status,a.id AS processor_id,
@@ -27,9 +26,10 @@ def reconcile(tenant: str):
                 WHERE a.tenant=p.tenant AND a.payment_id=p.id ORDER BY attempt DESC) a
             LEFT JOIN journal_transactions j ON j.tenant=p.tenant
                 AND j.operation=CONCAT('settlement:',p.id) AND j.status='posted'
-            WHERE p.tenant=:t AND p.created_at >= '2000-01-01' AND p.created_at <= :end""",
+            WHERE p.tenant=:t AND p.created_at >= '2000-01-01' AND p.created_at <=
+                (SELECT window_end FROM reconciliation_runs WHERE id=:run_id)""",
             t=tenant,
-            end=end,
+            run_id=run_id,
         )
         for row in rows:
             kinds = []
@@ -41,13 +41,36 @@ def reconcile(tenant: str):
                 kinds.append(
                     ("extra_journal", "Settlement journal exists without processor settlement")
                 )
-            if (row["outcome"] == "settled") != (row["status"] == "settled"):
+            if (row["outcome"] == "settled") != (row["status"] in ("settled", "refunded")):
                 kinds.append(("status_mismatch", "Processor and internal settlement status differ"))
             if any(
                 value is not None and value != row["amount"]
                 for value in (row["processor_amount"], row["journal_amount"])
             ):
                 kinds.append(("amount_mismatch", "Processor/payment/journal amounts differ"))
+            refunds = many(
+                conn,
+                """SELECT r.amount,r.original_journal_id,r.journal_id,j.status,
+                j.operation,(SELECT SUM(l.amount) FROM journal_lines l
+                WHERE l.journal_id=r.journal_id AND l.account='CASH') AS cash
+                FROM refunds r LEFT JOIN journal_transactions j ON j.id=r.journal_id
+                WHERE r.tenant=:t AND r.payment_id=:p""",
+                t=tenant,
+                p=row["id"],
+            )
+            if (row["status"] == "refunded") != bool(refunds):
+                kinds.append(("refund_status_mismatch", "Refund evidence and payment state differ"))
+            for refund in refunds:
+                if refund["status"] != "posted" or refund["cash"] is None:
+                    kinds.append(("missing_refund_journal", "Refund lacks a posted cash reversal"))
+                elif (
+                    refund["amount"] != row["amount"]
+                    or refund["cash"] != -row["amount"]
+                    or refund["original_journal_id"] != row["journal_id"]
+                ):
+                    kinds.append(
+                        ("refund_amount_mismatch", "Refund does not reverse its settlement")
+                    )
             for kind, detail in kinds:
                 finding = {
                     "id": str(uuid4()),

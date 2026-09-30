@@ -5,7 +5,7 @@
 - [x] Initial ledger slice: invoice + payment + journal, 50-request SQL concurrency tests.
 - [x] Async implementation and SQL fault tests: outbox/inbox, retries, parking, reconciliation.
 - [x] Local HTTP smoke and desktop/mobile browser journey; actual screenshots.
-- [ ] Finish ledger acceptance: refund/reversal operation and concurrent draft-posting fault tests.
+- [x] Full simulated refund/reversal operation and concurrent draft-posting fault tests.
 - [ ] Verify real broker acknowledgement, rebalance and process-kill recovery.
 - [ ] Validate Compose startup on a Docker host.
 - [ ] Local Kubernetes/Helm, probes, scaling, measured failure drill.

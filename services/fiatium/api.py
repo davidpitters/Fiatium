@@ -9,9 +9,10 @@ from sqlalchemy.exc import DBAPIError
 
 from fiatium.config import settings
 from fiatium.db import engine, many, one
-from fiatium.domain import CustomerInput, InvoiceInput, PaymentInput, Problem
+from fiatium.domain import CustomerInput, InvoiceInput, PaymentInput, Problem, RefundInput
 from fiatium.payments import create_invoice, submit_payment
 from fiatium.reconciliation import reconcile
+from fiatium.refunds import refund_payment
 
 app = FastAPI(title="Fiatium — simulated payments", version="0.1.0")
 
@@ -70,6 +71,7 @@ def live():
 def ready():
     with engine().connect() as conn:
         conn.execute(text("SELECT TOP (1) id FROM customers"))
+        conn.execute(text("SELECT TOP (1) id FROM refunds"))
     if not settings().tokens:
         raise Problem(503, "Demo authentication is not configured")
     return {"status": "ready"}
@@ -170,7 +172,26 @@ def payment_detail(payment_id: UUID, identity: Identity):
             t=tenant,
             p=pid,
         )
+        result["refunds"] = many(
+            conn, "SELECT * FROM refunds WHERE tenant=:t AND payment_id=:p", t=tenant, p=pid
+        )
         return result
+
+
+@app.post("/api/refunds", status_code=201)
+def refund(
+    data: RefundInput,
+    identity: Identity,
+    request: Request,
+    idempotency_key: Annotated[str, Header(min_length=1, max_length=128)],
+):
+    operator(identity)
+    result, replay = refund_payment(
+        identity["tenant"], data, idempotency_key, request.state.correlation_id
+    )
+    return JSONResponse(
+        result, status_code=201, headers={"Idempotency-Replayed": str(replay).lower()}
+    )
 
 
 @app.get("/api/journals")

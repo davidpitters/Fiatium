@@ -1,4 +1,38 @@
-# Verification record — 2026-09-29
+# Verification record
+
+## Refund continuation — 2026-09-30
+
+- Applied Alembic `0002` to the existing FiatiumDev database; original data retained.
+- `FIATIUM_SQL_TESTS=1 python -m pytest -q -p no:cacheprovider`: **31 passed**
+  in 4.01 seconds. Same existing Starlette/httpx deprecation warning.
+- `pnpm build`: TypeScript and Vite production build passed with the refund UI.
+- `python scripts/smoke.py --direct --receipt-file artifacts/refund-fixture.json`:
+  HTTP payment/settlement smoke passed, now scoped to its own outbox record.
+- `node scripts/browser-refund-smoke.cjs`: passed in installed headless Chrome.
+  Verified full refund through the UI, identical idempotent replay, preserved
+  original journal, balanced reversal, reopened invoice and clean reconciliation.
+  Mobile viewport overflow check passed; actual refund evidence screenshot inspected.
+
+New SQL tests cover 50 concurrent identical refunds, competing keys, late payment
+events after refund, re-payment, rollback after reversal posting, refusal for
+inconsistent/unsettled evidence, tenant/role checks, immutable refund evidence and
+missing refund-record reconciliation. The concurrent draft-posting fault test
+observed SQL lock timeout 1222 while posting was uncommitted, then immutable-journal
+error 51013 after commit, with unchanged balanced lines. That direct SQL fault test
+requires migration/admin permissions and explicitly skips under the restricted app
+login used by Compose CI; all tests ran locally with no skips.
+
+A real timestamp boundary failure was found: SQL Server recorded creation time
+`...5057456` while Python supplied cutoff `...5057450`, excluding a fresh payment.
+Reconciliation now records its cutoff with SYSUTCDATETIME and compares against the
+stored SQL timestamp without a Python precision round-trip.
+
+Full refunds use a synchronous in-process fake processor receipt committed with
+the SQL reversal. Remote refund calls, partial refunds, invoice cancellation,
+general corrections and refund events on Kafka are not implemented. Docker remains
+unavailable; broker/container, Kubernetes and AI gates below remain open.
+
+## Initial implementation snapshot — 2026-09-29
 
 ## Observed on this workstation
 

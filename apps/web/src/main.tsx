@@ -23,6 +23,13 @@ type Detail = Payment & {
   attempts: { id: string; attempt: number; outcome: string; amount: number }[];
   events: { id: string; event_type: string; sent_at: string | null }[];
   parked: { id: string; reason: string }[];
+  refunds: {
+    id: string;
+    amount: number;
+    reason: string;
+    journal_id: string;
+    processor_reference: string;
+  }[];
 };
 const money = (value: number) =>
   new Intl.NumberFormat("en-CA", { style: "currency", currency: "CAD" }).format(
@@ -49,6 +56,8 @@ function App() {
   const [customerId, setCustomerId] = useState("");
   const [amount, setAmount] = useState("12500");
   const [scenario, setScenario] = useState("success");
+  const [refundReason, setRefundReason] = useState("");
+  const refundKeys = useRef(new Map<string, string>());
   const pending = useRef(new Map<string, { key: string; scenario: string }>());
   const session = useRef(0);
   const refreshSequence = useRef(0);
@@ -153,6 +162,8 @@ function App() {
     setConnectionError("");
     setNotice("");
     pending.current.clear();
+    setRefundReason("");
+    refundKeys.current.clear();
   }
 
   const total = payments
@@ -515,6 +526,64 @@ function App() {
                     </Button>
                   </div>
                   <p>Snapshot at inspection · {detail.status}</p>
+                  {detail.refunds.map((refund) => (
+                    <p key={refund.id}>
+                      Refunded {money(refund.amount)} · {refund.reason}
+                      <br />
+                      Reversing journal <code>{refund.journal_id}</code>
+                      <br />
+                      Simulated processor receipt{" "}
+                      <code>{refund.processor_reference}</code>
+                    </p>
+                  ))}
+                  {detail.status === "settled" && (
+                    <form
+                      onSubmit={(event) => {
+                        event.preventDefault();
+                        const paymentId = detail.id;
+                        const reason = refundReason.trim();
+                        const requestId = JSON.stringify([paymentId, reason]);
+                        const key =
+                          refundKeys.current.get(requestId) ||
+                          crypto.randomUUID();
+                        refundKeys.current.set(requestId, key);
+                        void action(async () => {
+                          await api(
+                            "refunds",
+                            { payment_id: paymentId, reason },
+                            key,
+                          );
+                          setDetail(await api<Detail>(`payments/${paymentId}`));
+                          setRefundReason("");
+                          setNotice(
+                            "Full simulated refund recorded. The original journal is preserved and the invoice is open again.",
+                          );
+                        });
+                      }}
+                    >
+                      <p>
+                        A full refund creates a new reversing journal and
+                        reopens this invoice. It does not cancel the invoice.
+                      </p>
+                      <label>
+                        Refund reason
+                        <input
+                          required
+                          maxLength={240}
+                          value={refundReason}
+                          onChange={(event) =>
+                            setRefundReason(event.target.value)
+                          }
+                        />
+                      </label>
+                      <Button
+                        type="submit"
+                        disabled={busy || !refundReason.trim()}
+                      >
+                        Refund {money(detail.amount)} in full
+                      </Button>
+                    </form>
+                  )}
                   {detail.attempts.map((a) => (
                     <p key={a.id}>
                       Attempt {a.attempt}: <strong>{a.outcome}</strong> ·{" "}

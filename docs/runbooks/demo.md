@@ -12,6 +12,22 @@
    It does not change the ledger. Repeated runs keep historical findings.
 7. Try `decline` (no cash posting), `timeout` or `delayed` (second attempt settles),
    and `duplicate` (same callback handled twice, one posting).
+8. Inspect a settled payment, enter a refund reason and choose **Refund in full**.
+   The new journal debits AR and credits CASH. The original settlement is preserved,
+   the payment becomes refunded, and the invoice opens for repayment. Reconciliation
+   should find no new mismatch for this payment. Refunds do not cancel invoices.
+
+Refund browser regression, with the local API/web running:
+
+```powershell
+.venv/Scripts/python.exe scripts/smoke.py --direct --receipt-file artifacts/refund-fixture.json
+node scripts/browser-refund-smoke.cjs
+```
+
+The smoke prepares its own simulated payment; the browser only refunds that payment.
+[Actual refund evidence screenshot](../images/refund-evidence.png).
+The direct HTTP smoke now targets only its own outbox event, avoiding unrelated test
+or demo work. Full broker verification still requires running without `--direct`.
 
 The `ledger_failure` flag intentionally remains a persistent fault. No approved
 replay endpoint exists yet. Do not manually edit posted journals to fix the demo.

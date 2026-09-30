@@ -40,6 +40,11 @@ class PaymentInput(Input):
     scenario: Scenario = Scenario.success
 
 
+class RefundInput(Input):
+    payment_id: UUID
+    reason: str = Field(min_length=1, max_length=240, pattern=r"\S")
+
+
 def fingerprint(payload: BaseModel) -> str:
     canonical = json.dumps(payload.model_dump(mode="json"), sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(canonical.encode()).hexdigest()

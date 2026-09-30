@@ -25,12 +25,13 @@ flowchart LR
 
 Implemented: React/TypeScript UI, authenticated tenant-scoped FastAPI, SQL Server
 migrations, customer/invoice/payment journey, immutable balanced postings,
-idempotency, deterministic failure scenarios, outbox/inbox, parking, reconciliation.
+idempotency, deterministic failure scenarios, outbox/inbox, parking, reconciliation,
+and full simulated refunds that preserve the original settlement journal.
 SQL invariants and concurrency have been tested against real local SQL Server.
 
 Compose and CI are supplied but have not run on this workstation. Actual Kafka
 delivery, container startup, restricted SQL user, Kubernetes/Helm, telemetry, AI
-investigation/approval, refunds/corrections and cloud deployment remain acceptance
+investigation/approval, partial refunds/general corrections and cloud deployment remain acceptance
 work. See the verification record rather than assuming configuration means success.
 
 ## Run locally
@@ -64,6 +65,9 @@ payments, run the explicit **direct development transport**:
 ```
 
 The direct transport is useful without a broker; it is not a Kafka reliability test.
+To upgrade an existing checkout, stop the API, run
+`.venv/Scripts/python.exe -m alembic upgrade head`, rebuild the web app, then restart.
+Refunds require migration `0002`; readiness checks that its table is present.
 API docs: [OpenAPI UI](http://127.0.0.1:8000/docs). Logs and startup process IDs are in
 ignored `artifacts/`. Stop only the API/web process IDs printed by the startup script
 using `Stop-Process -Id <api-pid>,<web-pid>` after checking they still refer to these services.
@@ -118,6 +122,9 @@ run these tests against a database with real data. CI definitions are not CI res
   repeat delivery. No distributed exactly-once claim is made.
 - Processor success can precede ledger settlement. Reconciliation records missing,
   extra, amount and status discrepancies without repairing them.
+- Full refunds create a new AR/cash reversal and reopen the invoice. The fake
+  refund receipt and SQL effects commit together; no external refund call is made.
+  Inspect a settled payment in the UI, enter a reason and choose the full refund action.
 - Demo authentication maps tokens to tenant/role server-side; every tenant API query
   is scoped. Administrative database users remain outside that protection boundary.
 - Lists are bounded to recent rows (200 records; 400 journal lines). Reconciliation
