@@ -10,7 +10,7 @@ jobs:
       - run: pip install -r requirements-dev.lock
       - run: ruff check services tests db/migrations scripts
       - run: ruff format --check services tests db/migrations scripts
-      - run: pytest tests/test_domain.py -q
+      - run: pytest tests/test_domain.py tests/test_worker_delivery.py -q
   web:
     runs-on: ubuntu-24.04
     steps:
@@ -39,6 +39,8 @@ jobs:
         run: |
           docker compose --env-file .env.compose stop publisher worker
           docker compose --env-file .env.compose run --rm verify
+      - name: Real broker crash and redelivery drill
+        run: docker compose --env-file .env.compose run --rm -e FIATIUM_BROKER_TESTS=1 verify python -m pytest tests/test_broker_recovery.py -q -p no:cacheprovider
       - name: Logs on failure
         if: failure()
         run: docker compose --env-file .env.compose logs --no-color --tail 100

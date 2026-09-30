@@ -28,6 +28,9 @@ migrations, customer/invoice/payment journey, immutable balanced postings,
 idempotency, deterministic failure scenarios, outbox/inbox, parking, reconciliation,
 and full simulated refunds that preserve the original settlement journal.
 SQL invariants and concurrency have been tested against real local SQL Server.
+Actual process termination at three SQL boundaries has also been verified; see the
+[worker recovery drill](docs/runbooks/worker-recovery.md) for its scope and the
+separate real-broker acceptance tests that still require Docker.
 
 Compose and CI are supplied but have not run on this workstation. Actual Kafka
 delivery, container startup, restricted SQL user, Kubernetes/Helm, telemetry, AI

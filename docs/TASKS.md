@@ -6,6 +6,8 @@
 - [x] Async implementation and SQL fault tests: outbox/inbox, retries, parking, reconciliation.
 - [x] Local HTTP smoke and desktop/mobile browser journey; actual screenshots.
 - [x] Full simulated refund/reversal operation and concurrent draft-posting fault tests.
+- [x] Actual process-kill SQL recovery tests and broker acknowledgement failure handling.
+- [x] Opt-in real-broker recovery drill wired into Compose CI (execution pending).
 - [ ] Verify real broker acknowledgement, rebalance and process-kill recovery.
 - [ ] Validate Compose startup on a Docker host.
 - [ ] Local Kubernetes/Helm, probes, scaling, measured failure drill.

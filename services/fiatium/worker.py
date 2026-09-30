@@ -10,7 +10,7 @@ from datetime import datetime
 from typing import Literal
 from uuid import UUID
 
-from confluent_kafka import Consumer, Producer
+from confluent_kafka import Consumer, KafkaException, Producer
 from pydantic import BaseModel, ConfigDict, ValidationError
 from sqlalchemy import text
 from sqlalchemy.exc import DBAPIError
@@ -21,6 +21,10 @@ from fiatium.processing import RetryLater, park, process
 
 log = logging.getLogger("fiatium.worker")
 stopping = threading.Event()
+
+
+class DeliveryRetry(RuntimeError):
+    """A broker acknowledgement was not confirmed; keep the record replayable."""
 
 
 class Event(BaseModel):
@@ -94,6 +98,23 @@ def publish_one(send, event_id=None):
         return True
 
 
+def send_to_broker(producer, key, payload):
+    outcomes = []
+
+    def delivered(error, message):
+        outcomes.append(error)
+
+    try:
+        producer.produce(settings().topic, key=key, value=payload, on_delivery=delivered)
+    except BufferError:
+        # Serve pending delivery callbacks so a full local queue can drain before retry.
+        producer.poll(0)
+        raise
+    remaining = producer.flush(20)
+    if remaining or len(outcomes) != 1 or outcomes[0] is not None:
+        raise DeliveryRetry("Broker acknowledgement was not confirmed")
+
+
 def publish():
     producer = Producer(
         {
@@ -103,58 +124,53 @@ def publish():
         }
     )
 
-    def send(key, payload):
-        errors = []
-
-        def delivered(error, message):
-            if error:
-                errors.append(error)
-
-        producer.produce(settings().topic, key=key, value=payload, on_delivery=delivered)
-        remaining = producer.flush(20)
-        if remaining or errors:
-            raise RuntimeError("Broker acknowledgement failed")
-
     while not stopping.is_set():
         try:
-            if not publish_one(send):
+            if not publish_one(lambda key, payload: send_to_broker(producer, key, payload)):
                 stopping.wait(0.5)
-        except (DBAPIError, RuntimeError):
+        except (DBAPIError, DeliveryRetry, KafkaException, BufferError):
             log.warning("Publisher dependency unavailable; outbox retained")
             stopping.wait(2)
 
 
-def consume():
-    consumer = Consumer(
-        {
-            "bootstrap.servers": settings().broker,
-            "group.id": "payment-worker-v1",
-            "auto.offset.reset": "earliest",
-            "enable.auto.commit": False,
-            "enable.auto.offset.store": False,
-            "max.poll.interval.ms": 300000,
-        }
-    )
-    consumer.subscribe([settings().topic])
+def consumer_config():
+    return {
+        "bootstrap.servers": settings().broker,
+        "group.id": "payment-worker-v1",
+        "auto.offset.reset": "earliest",
+        "enable.auto.commit": False,
+        "enable.auto.offset.store": False,
+        "max.poll.interval.ms": 300000,
+    }
+
+
+def consume_session(consumer, handler=handle, stop=stopping):
+    """A dependency failure ends this assignment without polling past the failed record."""
     try:
-        while not stopping.is_set():
+        consumer.subscribe([settings().topic])
+        while not stop.is_set():
             message = consumer.poll(1)
             if message is None:
                 continue
             if message.error():
-                log.warning("Broker poll failed")
-                continue
-            # Do not poll beyond an uncommitted record following a DB failure.
-            while not stopping.is_set():
-                try:
-                    handle(message.value() or b"")
-                    consumer.commit(message=message, asynchronous=False)
-                    break
-                except (DBAPIError, RetryLater):
-                    log.warning("SQL/effect unavailable; message remains unacknowledged")
-                    stopping.wait(2)
+                raise KafkaException(message.error())
+            handler(message.value() or b"")
+            offsets = consumer.commit(message=message, asynchronous=False)
+            if not offsets or any(partition.error for partition in offsets):
+                raise DeliveryRetry("Offset acknowledgement was not confirmed")
     finally:
         consumer.close()
+
+
+def consume():
+    while not stopping.is_set():
+        try:
+            consume_session(Consumer(consumer_config()))
+        except (DBAPIError, RetryLater, DeliveryRetry, KafkaException):
+            # Rejoin after failures instead of holding a dead assignment through max.poll.interval.
+            # Closing never auto-commits: redelivery is handled by the durable SQL guards.
+            log.warning("Worker dependency/commit failed; rejoining from committed offsets")
+            stopping.wait(2)
 
 
 def local_once():

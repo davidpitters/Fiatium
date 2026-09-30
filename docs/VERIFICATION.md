@@ -1,5 +1,25 @@
 # Verification record
 
+## Worker recovery continuation — 2026-09-30
+
+- Real child processes were killed at three SQL checkpoints: after processor
+  success, after settlement/inbox commit, and inside an open outbox transaction.
+  All three recovered to one processor result and one balanced settlement.
+- Delivery tests check effect-before-commit ordering, no acknowledgement or further
+  polling after SQL failure, synchronous commit failures, per-partition commit
+  errors, missing delivery callbacks, producer queue overflow and consumer rejoin.
+- Full local run: **45 passed, 2 skipped**. The two skips explicitly require
+  `FIATIUM_BROKER_TESTS=1` and a real broker. The existing Starlette warning remains.
+- Docker and WSL installation checks confirmed neither is installed. No host
+  installation, restart or external deployment was performed.
+
+The opt-in real-broker drill and CI step are implemented but unexecuted here.
+They check real publish acknowledgement followed by publisher termination and
+republishing, plus settlement followed by consumer termination before Kafka commit.
+They use isolated topics/groups and inspect actual committed offsets. See the
+[recovery runbook](runbooks/worker-recovery.md) for commands, cleanup and limitations.
+Do not interpret mocked delivery tests or local process kills as broker validation.
+
 ## Refund continuation — 2026-09-30
 
 - Applied Alembic `0002` to the existing FiatiumDev database; original data retained.
